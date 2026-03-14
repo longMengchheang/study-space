@@ -1,0 +1,21 @@
+{
+  "folders": [
+    {
+      "name": "studio",
+      "path": "studio"
+    },
+    {
+      "name": "local-rag-ai-assistant",
+      "path": "labs/local-rag-ai-assistant"
+    },
+    {
+      "name": "transcript-whisper",
+      "path": "labs/transcript-whisper"
+    }
+  ],
+  "settings": {
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "terminal.integrated.cwd": "${workspaceFolder}"
+  }
+}

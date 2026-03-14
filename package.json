@@ -1,0 +1,9 @@
+{
+  "name": "studyspace-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "powershell -ExecutionPolicy Bypass -File .\\start-studyspace.ps1",
+    "dev:dry-run": "powershell -ExecutionPolicy Bypass -File .\\start-studyspace.ps1 -DryRun",
+    "dev:studio": "npm run dev --prefix .\\studio"
+  }
+}

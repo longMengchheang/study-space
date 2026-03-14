@@ -1,0 +1,62 @@
+import { NextResponse } from "next/server";
+import { buildLocalRagApiUrl } from "@/lib/local-rag";
+
+export async function GET() {
+  try {
+    const response = await fetch(buildLocalRagApiUrl("/collections"), {
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          detail: data.detail || "Unable to load collections.",
+        },
+        { status: response.status },
+      );
+    }
+
+    return NextResponse.json(data, { status: 200 });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        detail: error instanceof Error ? error.message : "Unable to reach Local RAG.",
+      },
+      { status: 503 },
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const response = await fetch(buildLocalRagApiUrl("/collections"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          detail: data.detail || "Unable to create collection.",
+        },
+        { status: response.status },
+      );
+    }
+
+    return NextResponse.json(data, { status: 200 });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        detail: error instanceof Error ? error.message : "Unable to reach Local RAG.",
+      },
+      { status: 503 },
+    );
+  }
+}

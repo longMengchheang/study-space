@@ -1,0 +1,15 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.13",
+  "pythonPlatform": "Windows",
+  "extraPaths": ["."],
+  "reportMissingModuleSource": false,
+  "reportMissingImports": "warning",
+  "exclude": [
+    ".venv",
+    "__pycache__",
+    "qdrant_db",
+    "frontend"
+  ]
+}
