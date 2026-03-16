@@ -370,6 +370,7 @@ export default function IdeWorkspaceClient() {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const terminalInputRef = useRef<HTMLInputElement | null>(null);
   const terminalLogRef = useRef<HTMLDivElement | null>(null);
+  const assistantMessagesRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<
     | {
         target: "explorer" | "assistant";
@@ -673,6 +674,14 @@ export default function IdeWorkspaceClient() {
 
     container.scrollTop = container.scrollHeight;
   }, [outputTab, runPanelVisible, terminalHistory, terminalRunning]);
+
+  useEffect(() => {
+    const container = assistantMessagesRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+  }, [messages, submitting]);
 
   function handleEditorMount(
     editor: MonacoEditor.IStandaloneCodeEditor,
@@ -1300,7 +1309,6 @@ export default function IdeWorkspaceClient() {
     duplicateFile,
     isCompactViewport,
     runActiveFile,
-    runTerminalCommand,
     showCommandPalette,
     showQuickOpen,
     startRenameActiveFile,
@@ -2027,7 +2035,7 @@ export default function IdeWorkspaceClient() {
                 )}
               </div>
 
-              <div className="ide-assistant-messages">
+              <div ref={assistantMessagesRef} className="ide-assistant-messages">
                 <div className="ide-assistant-thread">
                   {messages.length <= 1 ? (
                     <div className="ide-chat-empty">

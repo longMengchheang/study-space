@@ -366,6 +366,7 @@ export default function StudyRagClient() {
   const [isCompactViewport, setIsCompactViewport] = useState(false);
 
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const chatMessagesRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
     target: ResizeTarget;
     startX: number;
@@ -522,6 +523,14 @@ export default function StudyRagClient() {
       stopResize();
     };
   }, []);
+
+  useEffect(() => {
+    const container = chatMessagesRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+  }, [messages, chatLoading]);
 
   function persistChatSessions(nextSessions: ChatSessionRecord[]) {
     setChatSessions(nextSessions);
@@ -1746,7 +1755,7 @@ export default function StudyRagClient() {
 
           {centerPanelMode === "chat" ? (
             <>
-              <div className="rag-messages">
+              <div ref={chatMessagesRef} className="rag-messages">
                 {!storageReady ? (
                   <div className="rag-chat-empty">
                     <div className="rag-chat-empty-icon">
