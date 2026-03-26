@@ -7,15 +7,64 @@ export const runtime = "nodejs";
 const MAX_COMMAND_LENGTH = 1200;
 const MAX_OUTPUT_BYTES = 220_000;
 const TERMINAL_TIMEOUT_MS = 20_000;
-const BLOCKED_COMMAND_PATTERNS = [
-  "rm -rf /",
-  "rd /s /q",
-  "del /f /q",
-  "format ",
-  "shutdown",
-  "reboot",
-  "halt",
-];
+
+/**
+ * Allowlist of permitted base commands for the embedded terminal.
+ *
+ * Security model: the terminal runs on the host, so only a known-safe set
+ * of read-only / dev-workflow commands is permitted. This replaces the
+ * previous blocklist approach, which could be bypassed trivially (e.g.
+ * `rm -rf /*` would not match `rm -rf /`).
+ *
+ * Commands are matched against the first token of the input (case-insensitive
+ * on Windows, exact on POSIX). Extend this list deliberately — never switch
+ * back to a blocklist.
+ */
+const ALLOWED_COMMANDS = new Set([
+  // Navigation & inspection
+  "ls",
+  "dir",
+  "pwd",
+  "echo",
+  "cat",
+  "type",
+  "head",
+  "tail",
+  "grep",
+  "find",
+  "which",
+  "where",
+  "env",
+  "set",
+  "printenv",
+  // File creation (safe for a dev workspace)
+  "mkdir",
+  "touch",
+  "cp",
+  "copy",
+  "mv",
+  "move",
+  // Version control
+  "git",
+  // Package managers & runtimes (users code here)
+  "npm",
+  "npx",
+  "node",
+  "python",
+  "python3",
+  "pip",
+  "pip3",
+  "py",
+  // Build tools
+  "make",
+  "cargo",
+  "go",
+  "rustc",
+  "javac",
+  "java",
+  "mvn",
+  "gradle",
+]);
 
 type TerminalAttempt = {
   stdout: string;
@@ -31,9 +80,20 @@ function appendChunk(current: string, chunk: Buffer | string) {
   return next.length > MAX_OUTPUT_BYTES ? next.slice(0, MAX_OUTPUT_BYTES) : next;
 }
 
-function isBlockedCommand(command: string) {
-  const normalized = command.trim().toLowerCase();
-  return BLOCKED_COMMAND_PATTERNS.some((pattern) => normalized.includes(pattern));
+/**
+ * Extract the base command (first token) and check it against the allowlist.
+ * Handles quoted first tokens (e.g. `"python" script.py`).
+ */
+function isAllowedCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+
+  // Strip an optional leading quote around the first token
+  const stripped = trimmed.startsWith('"') || trimmed.startsWith("'") ? trimmed.slice(1) : trimmed;
+  const base = stripped.split(/[\s"']/)[0].toLowerCase();
+  // On Windows the command might have a .exe extension
+  const baseWithoutExt = base.endsWith(".exe") ? base.slice(0, -4) : base;
+  return ALLOWED_COMMANDS.has(base) || ALLOWED_COMMANDS.has(baseWithoutExt);
 }
 
 function resolveWorkingDirectory(baseRoot: string, requested?: string, relativeFrom?: string) {
@@ -176,10 +236,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (isBlockedCommand(command)) {
+  if (!isAllowedCommand(command)) {
     return NextResponse.json(
       {
-        detail: "This command is blocked in the embedded terminal.",
+        detail:
+          "This command is not permitted in the embedded terminal. " +
+          "Only development-workflow commands (git, npm, node, python, ls, etc.) are allowed.",
       },
       { status: 400 },
     );

@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,10 +54,20 @@ def _load_records() -> list[CollectionRecord]:
 def _save_records(records: list[CollectionRecord]) -> None:
     COLLECTIONS_ROOT.mkdir(parents=True, exist_ok=True)
     payload = [asdict(record) for record in records]
-    COLLECTIONS_INDEX_PATH.write_text(
-        json.dumps(payload, indent=2),
-        encoding="utf-8",
-    )
+    # Write to a temp file in the same directory then atomically rename so a
+    # crash mid-write cannot corrupt the index.
+    dir_path = COLLECTIONS_INDEX_PATH.parent
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2)
+        os.replace(tmp_path, COLLECTIONS_INDEX_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def ensure_collection_index() -> list[CollectionRecord]:

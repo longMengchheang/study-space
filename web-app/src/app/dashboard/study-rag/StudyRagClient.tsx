@@ -118,6 +118,8 @@ const RAG_CHAT_SESSIONS_STORAGE_KEY = "studyspace:rag-chat-sessions";
 const RAG_PINNED_OUTPUTS_STORAGE_KEY = "studyspace:rag-pinned-outputs";
 const RAG_LAYOUT_STORAGE_KEY = "studyspace:rag-layout.v1";
 const COLLAPSED_RAG_PANEL_WIDTH = 54;
+// Max prior turns sent as history (1 turn = 1 user + 1 assistant message).
+const RAG_HISTORY_WINDOW = 10;
 
 type ResizeTarget = "sources" | "studio";
 
@@ -1089,6 +1091,16 @@ export default function StudyRagClient() {
     setChatLoading(true);
     setErrorMessage(null);
 
+    // Build conversation history from the prior messages (excludes the
+    // message just added, capped to the last RAG_HISTORY_WINDOW turns).
+    const historyMessages = baseMessages
+      .filter((m) => m.id !== STARTER_MESSAGE.id && m.role !== "ai" || m.sources !== undefined)
+      .slice(-(RAG_HISTORY_WINDOW * 2))
+      .map((m) => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.content,
+      }));
+
     try {
       const response = await fetch("/api/local-rag/chat", {
         method: "POST",
@@ -1099,6 +1111,7 @@ export default function StudyRagClient() {
           message,
           collection_id: activeCollectionId,
           source_names: selectedSourceNames,
+          history: historyMessages,
         }),
       });
       const data = (await response.json().catch(() => ({}))) as {

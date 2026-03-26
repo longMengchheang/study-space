@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 export type ForumChannel = {
@@ -145,8 +146,13 @@ async function loadStateFromDisk(): Promise<ForumState> {
 }
 
 async function saveStateToDisk(state: ForumState) {
-  await mkdir(path.dirname(FORUM_DB_PATH), { recursive: true });
-  await writeFile(FORUM_DB_PATH, JSON.stringify(state, null, 2), "utf8");
+  const dir = path.dirname(FORUM_DB_PATH);
+  await mkdir(dir, { recursive: true });
+  // Write to a sibling temp file then atomically rename to prevent
+  // corrupting the database if the process crashes mid-write.
+  const tmpPath = path.join(dir, `.forum-db-${randomUUID()}.tmp`);
+  await writeFile(tmpPath, JSON.stringify(state, null, 2), "utf8");
+  await rename(tmpPath, FORUM_DB_PATH);
 }
 
 async function queueMutation<T>(task: () => Promise<T>): Promise<T> {

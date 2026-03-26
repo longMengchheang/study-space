@@ -31,31 +31,37 @@ const NAV_ITEMS = [
     href: "/dashboard",
     label: "Dashboard",
     icon: <LayoutDashboard className="h-5 w-5" />,
+    badge: null,
   },
   {
     href: "/dashboard/transcript-whisper",
     label: "Transcript",
     icon: <AudioLines className="h-5 w-5" />,
+    badge: null,
   },
   {
     href: "/dashboard/study-rag",
     label: "RAG",
     icon: <Brain className="h-5 w-5" />,
+    badge: null,
   },
   {
     href: "/dashboard/docs",
     label: "Docs",
     icon: <BookOpenText className="h-5 w-5" />,
+    badge: null,
   },
   {
     href: "/dashboard/forum",
     label: "Forum",
     icon: <MessagesSquare className="h-5 w-5" />,
+    badge: "Beta",
   },
   {
     href: "/dashboard/ide",
     label: "IDE",
     icon: <Code2 className="h-5 w-5" />,
+    badge: null,
   },
 ];
 
@@ -258,6 +264,11 @@ export default function DashboardSidebar() {
               >
                 {item.label}
               </span>
+              {item.badge && !collapsed && (
+                <span className="ml-auto shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-accent">
+                  {item.badge}
+                </span>
+              )}
             </Link>
           );
         })}
