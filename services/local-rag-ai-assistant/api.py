@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
@@ -643,6 +644,94 @@ async def chat_endpoint(req: ChatRequest):
     except Exception as exc:
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest):
+    """Server-Sent Events streaming variant of /chat.
+
+    Emits newline-delimited SSE events::
+
+        data: {"token": "Hello"}\n\n
+        data: {"token": " world"}\n\n
+        data: {"done": true, "sources": [...]}\n\n
+
+    A final ``{"done": true, "sources": [...]}`` event signals completion.
+    Errors are emitted as ``{"error": "message"}`` followed by stream close.
+    """
+    import json
+
+    ensure_collection_has_documents(req.collection_id)
+
+    chat_history: list[HumanMessage | AIMessage] = []
+    for msg in req.history:
+        if msg.role == "user":
+            chat_history.append(HumanMessage(content=msg.content))
+        else:
+            chat_history.append(AIMessage(content=msg.content))
+
+    async def event_generator():
+        try:
+            runtime = get_collection_runtime(req.collection_id)
+
+            if req.source_names:
+                source_docs = retrieve_documents(
+                    req.message, runtime["retriever"], req.source_names
+                )
+                if not source_docs:
+                    yield f"data: {json.dumps({'error': 'No matching context was found in the selected sources.'})}\n\n"
+                    return
+                context = "\n\n---\n\n".join(doc.page_content for doc in source_docs)
+                prompt_messages = runtime["prompt"].format_messages(
+                    context=context,
+                    chat_history=chat_history,
+                    input=normalize_question(req.message),
+                )
+                for chunk in runtime["llm"].stream(prompt_messages):
+                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if token:
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+            else:
+                # Use the history-aware retriever to rewrite the question,
+                # then stream the LLM answer token by token.
+                history_aware = runtime["rag_chain"].steps[0]  # history_aware_retriever
+                retriever_chain = runtime["rag_chain"].steps[1]  # combine_docs_chain
+
+                source_docs = await history_aware.ainvoke(
+                    {"input": req.message, "chat_history": chat_history}
+                )
+                if not source_docs:
+                    yield f"data: {json.dumps({'error': 'No matching context was found in the collection.'})}\n\n"
+                    return
+
+                context = "\n\n---\n\n".join(
+                    doc.page_content for doc in source_docs
+                )
+                prompt_messages = runtime["prompt"].format_messages(
+                    context=context,
+                    chat_history=chat_history,
+                    input=normalize_question(req.message),
+                )
+                for chunk in runtime["llm"].stream(prompt_messages):
+                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if token:
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+
+            yield f"data: {json.dumps({'done': True, 'sources': [s.model_dump() for s in build_source_references(source_docs)]})}\n\n"
+        except HTTPException as exc:
+            yield f"data: {json.dumps({'error': exc.detail})}\n\n"
+        except Exception as exc:
+            logger.exception("Streaming chat request failed")
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/artifacts", response_model=ArtifactResponse)

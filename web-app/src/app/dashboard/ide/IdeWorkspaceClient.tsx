@@ -86,7 +86,12 @@ type IdeCommandId =
   | "upload-files"
   | "toggle-wrap";
 
-type CodeRunResult = {
+type PendingEdit = {
+  proposedContent: string;
+  description: string;
+};
+
+
   runtime: "python" | "javascript";
   command: string;
   stdout: string;
@@ -299,7 +304,38 @@ function extractCodeBlock(response: string) {
   return match ? match[1].trimEnd() : null;
 }
 
-function createWorkspaceFile(name: string, content: string): PracticeFile {
+const IDE_CHAT_STORAGE_PREFIX = "studyspace.ide.chat.v1.";
+
+function loadPersistedChatMessages(fileId: string): AssistantMessage[] {
+  const INTRO: AssistantMessage = {
+    id: "assistant-intro",
+    role: "assistant",
+    content: "I am ready to help with the active file.",
+  };
+  if (typeof window === "undefined") return [INTRO];
+  try {
+    const raw = window.localStorage.getItem(`${IDE_CHAT_STORAGE_PREFIX}${fileId}`);
+    if (!raw) return [INTRO];
+    const parsed = JSON.parse(raw) as AssistantMessage[];
+    if (!Array.isArray(parsed) || parsed.length === 0) return [INTRO];
+    return parsed;
+  } catch {
+    return [INTRO];
+  }
+}
+
+function persistChatMessages(fileId: string, messages: AssistantMessage[]) {
+  try {
+    window.localStorage.setItem(
+      `${IDE_CHAT_STORAGE_PREFIX}${fileId}`,
+      JSON.stringify(messages),
+    );
+  } catch {
+    // Ignore storage quota errors.
+  }
+}
+
+
   return {
     id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
@@ -360,8 +396,10 @@ export default function IdeWorkspaceClient() {
       content: "I am ready to help with the active file.",
     },
   ]);
+  const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
 
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const lastChatFileIdRef = useRef<string | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const workspaceBodyRef = useRef<HTMLDivElement | null>(null);
   const editorStackRef = useRef<HTMLDivElement | null>(null);

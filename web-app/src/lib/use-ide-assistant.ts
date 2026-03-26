@@ -4,8 +4,16 @@
  * Manages the prompt input, message history, and the submitPrompt action.
  * Extracted from IdeWorkspaceClient to enable independent testing and
  * potential reuse.
+ *
+ * Key behaviours:
+ * - Chat history is persisted to localStorage keyed by the active file ID
+ *   so conversation context survives page reloads and file switches.
+ * - In "edit" mode the assistant response is held as a `pendingEdit`
+ *   (diff preview) rather than being applied immediately. The caller
+ *   should display both the original and proposed content and then call
+ *   `acceptEdit()` or `rejectEdit()` to finalize or discard the change.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PracticeFile } from "@/lib/ide-workspace";
 
 export type AssistantMessage = {
@@ -16,11 +24,21 @@ export type AssistantMessage = {
 
 export type AssistantMode = "ask" | "edit";
 
+/** A proposed file edit awaiting user confirmation. */
+export type PendingEdit = {
+  /** The full new content proposed by the assistant. */
+  proposedContent: string;
+  /** A short description of the edit (the user's original prompt). */
+  description: string;
+};
+
 const INTRO_MESSAGE: AssistantMessage = {
   id: "assistant-intro",
   role: "assistant",
   content: "I am ready to help with the active file.",
 };
+
+const IDE_CHAT_STORAGE_PREFIX = "studyspace.ide.chat.v1.";
 
 function truncateForContext(value: string, limit = 12_000) {
   return value.length > limit ? `${value.slice(0, limit)}\n...` : value;
@@ -29,6 +47,30 @@ function truncateForContext(value: string, limit = 12_000) {
 function extractCodeBlock(response: string) {
   const match = response.match(/```[\w-]*\n([\s\S]*?)```/);
   return match ? match[1].trimEnd() : null;
+}
+
+function loadPersistedMessages(fileId: string): AssistantMessage[] {
+  if (typeof window === "undefined") return [INTRO_MESSAGE];
+  try {
+    const raw = window.localStorage.getItem(`${IDE_CHAT_STORAGE_PREFIX}${fileId}`);
+    if (!raw) return [INTRO_MESSAGE];
+    const parsed = JSON.parse(raw) as AssistantMessage[];
+    if (!Array.isArray(parsed) || parsed.length === 0) return [INTRO_MESSAGE];
+    return parsed;
+  } catch {
+    return [INTRO_MESSAGE];
+  }
+}
+
+function persistMessages(fileId: string, messages: AssistantMessage[]) {
+  try {
+    window.localStorage.setItem(
+      `${IDE_CHAT_STORAGE_PREFIX}${fileId}`,
+      JSON.stringify(messages),
+    );
+  } catch {
+    // Ignore storage quota errors.
+  }
 }
 
 export interface UseIdeAssistantOptions {
@@ -44,6 +86,12 @@ export interface UseIdeAssistantResult {
   submitting: boolean;
   assistantMode: AssistantMode;
   setAssistantMode: React.Dispatch<React.SetStateAction<AssistantMode>>;
+  /** Non-null when the assistant has proposed an edit that is awaiting confirmation. */
+  pendingEdit: PendingEdit | null;
+  /** Accept the pending edit — calls onApplyEdit and clears pendingEdit. */
+  acceptEdit: () => void;
+  /** Reject the pending edit — clears pendingEdit without touching the file. */
+  rejectEdit: () => void;
   submitPrompt: () => Promise<void>;
   clearMessages: () => void;
 }
@@ -57,11 +105,61 @@ export function useIdeAssistant({
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [assistantMode, setAssistantMode] = useState<AssistantMode>("ask");
+  const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
+
+  // Track the last file ID we loaded messages for so we can persist on switch.
+  const lastFileIdRef = useRef<string | null>(null);
+
+  // Load persisted messages when the active file changes.
+  useEffect(() => {
+    if (!activeFile) return;
+    if (activeFile.id === lastFileIdRef.current) return;
+    lastFileIdRef.current = activeFile.id;
+    setMessages(loadPersistedMessages(activeFile.id));
+    setPendingEdit(null);
+  }, [activeFile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist messages whenever they change.
+  useEffect(() => {
+    if (!activeFile) return;
+    persistMessages(activeFile.id, messages);
+  }, [messages, activeFile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clearMessages = useCallback(() => {
     setMessages([INTRO_MESSAGE]);
     setPrompt("");
-  }, []);
+    setPendingEdit(null);
+    if (activeFile) {
+      persistMessages(activeFile.id, [INTRO_MESSAGE]);
+    }
+  }, [activeFile]);
+
+  const acceptEdit = useCallback(() => {
+    if (!pendingEdit) return;
+    onApplyEdit(pendingEdit.proposedContent);
+    setMessages((current) => [
+      ...current,
+      {
+        id: `assistant-accept-${Date.now()}`,
+        role: "assistant",
+        content: `✓ Edit applied to ${activeFile?.name ?? "the file"}.`,
+      },
+    ]);
+    setPendingEdit(null);
+  }, [pendingEdit, onApplyEdit, activeFile]);
+
+  const rejectEdit = useCallback(() => {
+    if (!pendingEdit) return;
+    setMessages((current) => [
+      ...current,
+      {
+        id: `assistant-reject-${Date.now()}`,
+        role: "assistant",
+        content: "Edit discarded.",
+      },
+    ]);
+    setPendingEdit(null);
+  }, [pendingEdit]);
 
   const submitPrompt = useCallback(async () => {
     if (!activeFile) return;
@@ -124,15 +222,16 @@ export function useIdeAssistant({
       if (assistantMode === "edit") {
         const nextContent = extractCodeBlock(assistantResponse);
         if (nextContent) {
-          onApplyEdit(nextContent);
+          // Hold the proposed content for diff preview instead of applying immediately.
           setMessages((current) => [
             ...current,
             {
               id: `assistant-${Date.now()}`,
               role: "assistant",
-              content: `Applied the edit to ${activeFile.name}.`,
+              content: `Proposed edit for **${activeFile.name}** — review the diff and accept or reject below.`,
             },
           ]);
+          setPendingEdit({ proposedContent: nextContent, description: value });
           return;
         }
       }
@@ -169,7 +268,11 @@ export function useIdeAssistant({
     submitting,
     assistantMode,
     setAssistantMode,
+    pendingEdit,
+    acceptEdit,
+    rejectEdit,
     submitPrompt,
     clearMessages,
   };
 }
+

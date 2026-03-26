@@ -132,7 +132,7 @@ describe("useIdeAssistant", () => {
     expect(userMsg?.content).toMatch(/^Edit file:/);
   });
 
-  it("calls onApplyEdit with extracted code block in edit mode", async () => {
+  it("calls onApplyEdit with extracted code block in edit mode when acceptEdit is called", async () => {
     const codeBlock = "print('hello world')";
     vi.stubGlobal(
       "fetch",
@@ -148,10 +148,38 @@ describe("useIdeAssistant", () => {
     await act(() => result.current.submitPrompt());
     await waitFor(() => expect(result.current.submitting).toBe(false));
 
+    // onApplyEdit is NOT called until the user accepts the diff.
+    expect(onApplyEdit).not.toHaveBeenCalled();
+    expect(result.current.pendingEdit).not.toBeNull();
+    expect(result.current.pendingEdit?.proposedContent).toBe(codeBlock);
+
+    act(() => result.current.acceptEdit());
     expect(onApplyEdit).toHaveBeenCalledWith(codeBlock);
+    expect(result.current.pendingEdit).toBeNull();
   });
 
-  it("adds confirmation message after a successful edit", async () => {
+  it("rejectEdit clears pendingEdit without calling onApplyEdit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      makeFetchOk({ response: "```python\nprint('hi')\n```" }),
+    );
+
+    const onApplyEdit = vi.fn();
+    const { result } = renderHook(() =>
+      useIdeAssistant({ activeFile: ACTIVE_FILE, selectionPreview: "", onApplyEdit }),
+    );
+    act(() => result.current.setAssistantMode("edit"));
+    act(() => result.current.setPrompt("refactor"));
+    await act(() => result.current.submitPrompt());
+    await waitFor(() => expect(result.current.submitting).toBe(false));
+
+    expect(result.current.pendingEdit).not.toBeNull();
+    act(() => result.current.rejectEdit());
+    expect(onApplyEdit).not.toHaveBeenCalled();
+    expect(result.current.pendingEdit).toBeNull();
+  });
+
+  it("adds diff-review message after a successful edit", async () => {
     vi.stubGlobal(
       "fetch",
       makeFetchOk({ response: "```python\nprint('done')\n```" }),
@@ -165,8 +193,8 @@ describe("useIdeAssistant", () => {
     await act(() => result.current.submitPrompt());
     await waitFor(() => expect(result.current.submitting).toBe(false));
 
-    const confirmMsg = result.current.messages.findLast((m) => m.role === "assistant");
-    expect(confirmMsg?.content).toContain(ACTIVE_FILE.name);
+    const reviewMsg = result.current.messages.findLast((m) => m.role === "assistant");
+    expect(reviewMsg?.content).toContain(ACTIVE_FILE.name);
   });
 
   it("includes selected code in the prompt body when selectionPreview is set", async () => {

@@ -304,6 +304,61 @@ export async function toggleForumReaction(input: ReactionInput) {
   });
 }
 
+export async function deleteForumMessage(messageId: string) {
+  if (!messageId.trim()) {
+    throw new Error("Message ID is required.");
+  }
+
+  return queueMutation(async () => {
+    const state = await getForumState();
+    const exists = state.messages.some((message) => message.id === messageId);
+    if (!exists) {
+      throw new Error("Message not found.");
+    }
+
+    // Remove the message and all of its replies.
+    const nextState: ForumState = {
+      ...state,
+      messages: state.messages.filter(
+        (message) => message.id !== messageId && message.parentId !== messageId,
+      ),
+      updatedAt: nowIso(),
+    };
+
+    await saveStateToDisk(nextState);
+    setCachedState(nextState);
+    publishState(nextState);
+    return nextState;
+  });
+}
+
+export async function deleteForumChannel(channelId: string) {
+  const DEFAULT_IDS = DEFAULT_CHANNELS.map((channel) => channel.id);
+  if (DEFAULT_IDS.includes(channelId)) {
+    throw new Error("Built-in channels cannot be deleted.");
+  }
+
+  return queueMutation(async () => {
+    const state = await getForumState();
+    const exists = state.channels.some((channel) => channel.id === channelId);
+    if (!exists) {
+      throw new Error("Channel not found.");
+    }
+
+    const nextState: ForumState = {
+      ...state,
+      channels: state.channels.filter((channel) => channel.id !== channelId),
+      messages: state.messages.filter((message) => message.channelId !== channelId),
+      updatedAt: nowIso(),
+    };
+
+    await saveStateToDisk(nextState);
+    setCachedState(nextState);
+    publishState(nextState);
+    return nextState;
+  });
+}
+
 export function subscribeForumState(listener: (state: ForumState) => void) {
   forumEmitter.on("state", listener);
   return () => forumEmitter.off("state", listener);

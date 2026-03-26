@@ -3,6 +3,8 @@ import { buildLocalRagApiUrl } from "@/lib/local-rag";
 import {
   addForumMessage,
   createForumChannel,
+  deleteForumChannel,
+  deleteForumMessage,
   getForumState,
   toggleForumReaction,
   type ForumMessage,
@@ -18,6 +20,10 @@ type ForumActionRequest =
       description?: string;
     }
   | {
+      action: "delete_channel";
+      channelId?: string;
+    }
+  | {
       action: "send_message";
       channelId?: string;
       content?: string;
@@ -25,6 +31,10 @@ type ForumActionRequest =
       userId?: string;
       username?: string;
       avatar?: string;
+    }
+  | {
+      action: "delete_message";
+      messageId?: string;
     }
   | {
       action: "toggle_reaction";
@@ -157,6 +167,10 @@ export async function POST(request: Request) {
         const next = await createForumChannel(body.name || "", body.description);
         return NextResponse.json(next, { status: 200 });
       }
+      case "delete_channel": {
+        const next = await deleteForumChannel(body.channelId?.trim() || "");
+        return NextResponse.json(next, { status: 200 });
+      }
       case "send_message": {
         const userId = body.userId?.trim() || `user-${Math.random().toString(36).slice(2, 8)}`;
         const username = body.username?.trim() || "Learner";
@@ -172,6 +186,10 @@ export async function POST(request: Request) {
           },
         });
 
+        return NextResponse.json(next, { status: 200 });
+      }
+      case "delete_message": {
+        const next = await deleteForumMessage(body.messageId?.trim() || "");
         return NextResponse.json(next, { status: 200 });
       }
       case "toggle_reaction": {

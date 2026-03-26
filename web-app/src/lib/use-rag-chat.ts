@@ -3,6 +3,11 @@
  *
  * Extracted from StudyRagClient so the logic can be unit-tested
  * independently and reused across different UI layouts.
+ *
+ * When the `/api/local-rag/chat/stream` endpoint is available the hook
+ * streams LLM tokens token-by-token using Server-Sent Events.  It
+ * automatically falls back to the non-streaming `/api/local-rag/chat`
+ * endpoint if streaming fails or is not supported.
  */
 import { useCallback, useState } from "react";
 
@@ -55,6 +60,69 @@ export interface UseRagChatResult {
   clearMessages: () => void;
 }
 
+/**
+ * Attempt a streaming request. Resolves when the stream completes.
+ * Returns the full reply text and sources array.
+ * Throws if the backend returns a non-streaming error or any event
+ * contains `{"error": "..."}`.
+ */
+async function streamChat(
+  body: object,
+  onToken: (token: string) => void,
+): Promise<{ reply: string; sources: SourceReference[] }> {
+  const response = await fetch("/api/local-rag/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok || !response.body) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail || "Streaming chat request failed.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reply = "";
+  let sources: SourceReference[] = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE lines are separated by "\n\n"
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const line = part.startsWith("data: ") ? part.slice(6) : part;
+      if (!line.trim()) continue;
+
+      const event = JSON.parse(line) as {
+        token?: string;
+        done?: boolean;
+        sources?: SourceReference[];
+        error?: string;
+      };
+
+      if (event.error) {
+        throw new Error(event.error);
+      }
+      if (event.token) {
+        reply += event.token;
+        onToken(event.token);
+      }
+      if (event.done) {
+        sources = event.sources ?? [];
+      }
+    }
+  }
+
+  return { reply, sources };
+}
+
 export function useRagChat({
   activeCollectionId,
   selectedSourceNames,
@@ -99,52 +167,94 @@ export function useRagChat({
         content: m.content,
       }));
 
+    const requestBody = {
+      message,
+      collection_id: activeCollectionId,
+      source_names: selectedSourceNames,
+      history: historyMessages,
+    };
+
+    // Placeholder AI message updated incrementally during streaming.
+    const aiId = buildMessageId("ai");
+    const streamingPlaceholder: Message = {
+      id: aiId,
+      role: "ai",
+      content: "",
+      sources: [],
+      timestamp: new Date().toISOString(),
+    };
+
     try {
-      const response = await fetch("/api/local-rag/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message,
-          collection_id: activeCollectionId,
-          source_names: selectedSourceNames,
-          history: historyMessages,
-        }),
+      // Optimistically add the placeholder so the UI shows a streaming bubble.
+      setMessages([...nextUserMessages, streamingPlaceholder]);
+
+      const { reply, sources } = await streamChat(requestBody, (token) => {
+        setMessages((current) =>
+          current.map((m) =>
+            m.id === aiId ? { ...m, content: m.content + token } : m,
+          ),
+        );
       });
 
-      const data = (await response.json().catch(() => ({}))) as {
-        reply?: string;
-        sources?: SourceReference[];
-        detail?: string;
+      // Finalise with complete reply + sources from the done event.
+      const finalAiMessage: Message = {
+        id: aiId,
+        role: "ai",
+        content: reply,
+        sources,
+        timestamp: new Date().toISOString(),
       };
+      const nextMessages = [...nextUserMessages, finalAiMessage];
+      setMessages(nextMessages);
+      onSaveSession?.(nextMessages);
+    } catch (streamError) {
+      // Streaming failed — fall back to the non-streaming endpoint.
+      try {
+        const response = await fetch("/api/local-rag/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
 
-      if (!response.ok) {
-        throw new Error(data.detail || "Unable to answer that question.");
+        const data = (await response.json().catch(() => ({}))) as {
+          reply?: string;
+          sources?: SourceReference[];
+          detail?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(data.detail || "Unable to answer that question.");
+        }
+
+        const aiMessage: Message = {
+          id: buildMessageId("ai"),
+          role: "ai",
+          content: data.reply || "",
+          sources: data.sources ?? [],
+          timestamp: new Date().toISOString(),
+        };
+        const nextMessages = [...nextUserMessages, aiMessage];
+        setMessages(nextMessages);
+        onSaveSession?.(nextMessages);
+      } catch (fallbackError) {
+        const detail =
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : streamError instanceof Error
+              ? streamError.message
+              : "Unable to answer that question.";
+        setErrorMessage(detail);
+
+        const errorReply: Message = {
+          id: buildMessageId("error"),
+          role: "ai",
+          content: detail,
+          timestamp: new Date().toISOString(),
+        };
+        const nextMessages = [...nextUserMessages, errorReply];
+        setMessages(nextMessages);
+        onSaveSession?.(nextMessages);
       }
-
-      const aiMessage: Message = {
-        id: buildMessageId("ai"),
-        role: "ai",
-        content: data.reply || "",
-        sources: data.sources ?? [],
-        timestamp: new Date().toISOString(),
-      };
-      const nextMessages = [...nextUserMessages, aiMessage];
-      setMessages(nextMessages);
-      onSaveSession?.(nextMessages);
-    } catch (error) {
-      const detail =
-        error instanceof Error ? error.message : "Unable to answer that question.";
-      setErrorMessage(detail);
-
-      const errorReply: Message = {
-        id: buildMessageId("error"),
-        role: "ai",
-        content: detail,
-        timestamp: new Date().toISOString(),
-      };
-      const nextMessages = [...nextUserMessages, errorReply];
-      setMessages(nextMessages);
-      onSaveSession?.(nextMessages);
     } finally {
       setChatLoading(false);
     }
@@ -161,3 +271,4 @@ export function useRagChat({
     clearMessages,
   };
 }
+
