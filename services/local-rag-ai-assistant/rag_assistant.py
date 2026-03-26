@@ -28,13 +28,14 @@ runtime = build_rag_runtime(
     embed_model=EMBED_MODEL,
     llm_model=LLM_MODEL,
 )
-rag_chain = runtime["chain"]
+rag_chain = runtime["rag_chain"]
 
 
 # ── Gradio callback ─────────────────────────────────────────────
 def rag_chat(message: str, history: list) -> str:
     """Stream-less version: returns the full answer."""
-    return rag_chain.invoke(message)
+    result = rag_chain.invoke({"input": message, "chat_history": []})
+    return result["answer"]
 
 
 # ── Launch ──────────────────────────────────────────────────────

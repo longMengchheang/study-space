@@ -11,6 +11,7 @@ Studyspace-friendly features:
 from __future__ import annotations
 
 import gc
+import hashlib
 import logging
 import threading
 from datetime import datetime
@@ -19,6 +20,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 from collection_store import (
@@ -84,10 +86,22 @@ class SourceReference(BaseModel):
     snippet: str
 
 
+class HistoryMessage(BaseModel):
+    """A single turn in the conversation history sent by the client."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str
     collection_id: str = LEGACY_COLLECTION_ID
     source_names: list[str] = Field(default_factory=list)
+    history: list[HistoryMessage] = Field(
+        default_factory=list,
+        description="Prior conversation turns (oldest first). Sent by the "
+        "client to enable multi-turn, context-aware answers.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -540,30 +554,55 @@ async def delete_collection_artifact(collection_id: str, artifact_name: str):
         ]
     )
 
-
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
     ensure_collection_has_documents(req.collection_id)
 
+    # Convert client history to LangChain message objects (oldest first).
+    chat_history: list[HumanMessage | AIMessage] = []
+    for msg in req.history:
+        if msg.role == "user":
+            chat_history.append(HumanMessage(content=msg.content))
+        else:
+            chat_history.append(AIMessage(content=msg.content))
+
     try:
         runtime = get_collection_runtime(req.collection_id)
-        chain = runtime["chain"]
-        source_docs = retrieve_documents(req.message, runtime["retriever"], req.source_names)
-        if not source_docs:
-            raise HTTPException(
-                status_code=400,
-                detail="No matching context was found in the selected sources.",
-            )
+
         if req.source_names:
-            context = "\n\n---\n\n".join(doc.page_content for doc in source_docs)
-            prompt = runtime["prompt"].format_messages(
-                context=context,
-                question=normalize_question(req.message),
+            # Source-filtered path: retrieve with source filtering then call
+            # the LLM directly so the user's chosen sources are respected.
+            source_docs = retrieve_documents(
+                req.message, runtime["retriever"], req.source_names
             )
-            result = runtime["llm"].invoke(prompt)
+            if not source_docs:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No matching context was found in the selected sources.",
+                )
+            context = "\n\n---\n\n".join(doc.page_content for doc in source_docs)
+            # The answer prompt expects {context, chat_history, input}.
+            prompt_messages = runtime["prompt"].format_messages(
+                context=context,
+                chat_history=chat_history,
+                input=normalize_question(req.message),
+            )
+            result = runtime["llm"].invoke(prompt_messages)
             reply = result.content if hasattr(result, "content") else str(result)
         else:
-            reply = chain.invoke(req.message)
+            # History-aware RAG chain: rewrites the question against the chat
+            # history, retrieves with MMR, then calls the LLM with full context.
+            result = runtime["rag_chain"].invoke(
+                {"input": req.message, "chat_history": chat_history}
+            )
+            reply = result["answer"]
+            source_docs = result.get("context") or []
+            if not source_docs:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No matching context was found in the collection.",
+                )
+
         return ChatResponse(reply=reply, sources=build_source_references(source_docs))
     except HTTPException:
         raise
@@ -626,6 +665,25 @@ async def upload_document(
                 status_code=413,
                 detail=f"File exceeds the {max_mb:.0f} MB upload limit.",
             )
+
+        # Skip re-ingestion when the exact same bytes already exist on disk.
+        # This prevents redundant embedding runs when a file is uploaded twice.
+        incoming_hash = hashlib.sha256(content).hexdigest()
+        if file_path.exists():
+            existing_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            if incoming_hash == existing_hash:
+                logger.info(
+                    "Skipping re-ingest for '%s': content unchanged (sha256=%s).",
+                    filename,
+                    incoming_hash[:12],
+                )
+                chunks = len(list_available_documents(collection_id))
+                return UploadResponse(
+                    filename=filename,
+                    status="unchanged",
+                    chunks_added=chunks,
+                    collection_id=collection_id,
+                )
 
         file_path.write_bytes(content)
         chunks_added = reingest_collection(collection_id)
