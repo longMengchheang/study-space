@@ -20,17 +20,20 @@ QUERY_REWRITES: tuple[tuple[str, str], ...] = (
 
 
 def build_query_variants(question: str) -> list[str]:
-    """Return the original question plus any rewritten variants."""
+    """Return the original question plus any rewritten variants.
+
+    Rewrites are applied case-insensitively to the original normalized text so
+    that the unmatched portions keep their original casing.
+    """
     normalized = " ".join(question.split())
     if not normalized:
         return [question]
 
     variants: list[str] = [normalized]
-    lowered = normalized.lower()
 
     for pattern, replacement in QUERY_REWRITES:
-        rewritten = re.sub(pattern, replacement, lowered)
-        if rewritten != lowered:
+        rewritten = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+        if rewritten.lower() != normalized.lower():
             variants.append(rewritten)
 
     unique_variants: list[str] = []

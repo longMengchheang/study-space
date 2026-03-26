@@ -164,6 +164,8 @@ def _run_upload_job(
         job_service.cancel_job(job_id)
     except (AudioExtractionError, TranscriptionError) as exc:
         job_service.fail_job(job_id, error=str(exc))
+    except Exception as exc:
+        job_service.fail_job(job_id, error=f"Unexpected error: {exc}")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -230,6 +232,8 @@ def _run_process_job(job_id: str, req: ProcessRequest) -> None:
         job_service.cancel_job(job_id)
     except (AudioExtractionError, TranscriptionError, ValueError) as exc:
         job_service.fail_job(job_id, error=str(exc))
+    except Exception as exc:
+        job_service.fail_job(job_id, error=f"Unexpected error: {exc}")
 
 
 @router.post("/process", response_model=ProcessResponse)
@@ -329,12 +333,16 @@ def upload_job(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
-    job = job_service.create_job(message="Upload received.")
-    temp_dir = Path(tempfile.mkdtemp(prefix=f"transcript-whisper-{job.job_id}-"))
-    input_path = temp_dir / _sanitize_upload_filename(file.filename)
-    with input_path.open("wb") as handle:
-        shutil.copyfileobj(file.file, handle)
+    temp_dir = Path(tempfile.mkdtemp(prefix="transcript-whisper-"))
+    try:
+        input_path = temp_dir / _sanitize_upload_filename(file.filename)
+        with input_path.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Failed to receive uploaded file: {exc}") from exc
 
+    job = job_service.create_job(message="Upload received.")
     _start_job(
         _run_upload_job,
         job.job_id,

@@ -22,12 +22,11 @@ class WhisperModelRegistry:
                 self._cache.move_to_end(model_name)
                 return self._cache[model_name]
 
-            if model_name not in self._cache:
-                import whisper
+            import whisper
 
-                self._cache[model_name] = whisper.load_model(model_name)
-                while len(self._cache) > self._max_cache_size:
-                    self._cache.popitem(last=False)
+            self._cache[model_name] = whisper.load_model(model_name)
+            while len(self._cache) > self._max_cache_size:
+                self._cache.popitem(last=False)
 
             return self._cache[model_name]
 
