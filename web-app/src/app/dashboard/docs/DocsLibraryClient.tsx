@@ -310,6 +310,8 @@ export default function DocsLibraryClient() {
   const [pendingDeleteSlug, setPendingDeleteSlug] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [ragImporting, setRagImporting] = useState(false);
+  const [ragImportMessage, setRagImportMessage] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -460,6 +462,31 @@ export default function DocsLibraryClient() {
       if (importInputRef.current) {
         importInputRef.current.value = "";
       }
+    }
+  }
+
+  async function sendDocToRag(doc: { baseTitle: string; baseContent: string | null }) {
+    const text = doc.baseContent ? stripHtml(doc.baseContent) : "";
+    if (!text.trim()) return;
+    setRagImporting(true);
+    setRagImportMessage(null);
+    try {
+      const blob = new Blob([text], { type: "text/plain" });
+      const formData = new FormData();
+      const filename = `${doc.baseTitle.replace(/[^a-z0-9]/gi, "-").toLowerCase()}-${Date.now()}.txt`;
+      formData.append("file", blob, filename);
+      formData.append("collection_id", "general");
+      const response = await fetch("/api/local-rag/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await response.json().catch(() => ({}))) as { filename?: string; detail?: string };
+      if (!response.ok) throw new Error(data.detail || "Import failed.");
+      setRagImportMessage(`Sent to RAG notebook as ${data.filename ?? filename}.`);
+    } catch (error) {
+      setRagImportMessage(error instanceof Error ? error.message : "Import failed.");
+    } finally {
+      setRagImporting(false);
     }
   }
 
@@ -912,17 +939,36 @@ export default function DocsLibraryClient() {
                   </button>
                 ) : null}
               </div>
-              <button
-                type="button"
-                onClick={() => selectedDoc && setPendingDeleteSlug(selectedDoc.slug)}
-                className="study-doc-delete-icon-button"
-                title="Delete document"
-                disabled={!selectedDoc}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <div className="study-doc-toolbar-actions">
+                <button
+                  type="button"
+                  onClick={() =>
+                    selectedDoc &&
+                    void sendDocToRag({ baseTitle: selectedDoc.baseTitle, baseContent: selectedDoc.baseContent })
+                  }
+                  className="study-button-secondary study-doc-action-button"
+                  title="Send document text to RAG notebook"
+                  disabled={!selectedDoc?.hasText || ragImporting}
+                >
+                  {ragImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {ragImporting ? "Sending…" : "Send to RAG"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectedDoc && setPendingDeleteSlug(selectedDoc.slug)}
+                  className="study-doc-delete-icon-button"
+                  title="Delete document"
+                  disabled={!selectedDoc}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
+
+          {ragImportMessage ? (
+            <div className="study-doc-import-banner">{ragImportMessage}</div>
+          ) : null}
 
           {importError ? (
             <div className="study-doc-import-banner">{importError}</div>

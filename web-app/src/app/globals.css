@@ -2257,6 +2257,12 @@ html[data-theme="dark"] .study-doc-import-banner {
   flex: 1 1 auto;
 }
 
+.study-doc-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .study-doc-sheet {
   margin: 0 auto;
   width: 100%;
